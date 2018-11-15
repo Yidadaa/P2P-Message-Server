@@ -1,5 +1,5 @@
 import sqlite3
-import os
+import os, time
 
 def get_path_of(filename):
   file_path = __file__
@@ -32,6 +32,16 @@ class DB:
     self.conn = sqlite3.connect(path, check_same_thread=False)
     print('Connected to Database')
 
+  def update_user_status(self, userid:int)->str:
+    """
+    更新用户的上次在线时间以及用户状态
+    """
+    now = int(time.time() * 1000)
+    sql = 'UPDATE USER SET last_online = %d, status = 1 WHERE id = %d' % (now, int(userid))
+
+    self.conn.execute(sql)
+    self.conn.commit()
+
   def add_user(self, user:dict):
     """
     新增用户到表中
@@ -39,14 +49,20 @@ class DB:
     cursor = self.conn.cursor()
     keys = list(user.keys())
     values = [str(i) if type(i) is not str else "'%s'" % i for i in list(user.values())]
+
     userid = None
+
+    keys.append('last_online')
+    values.append(int(time.time() * 1000))
+    keys.append('status')
+    values.append(1)
+
     try:
       sql = 'INSERT INTO USER (%s) VALUES (%s)' % (','.join(keys), ','.join(values))
       cursor.execute(sql)
-      userid = cursor.execute('SELECT max(id) FROM USER')
+      userid = cursor.execute('SELECT max(id) FROM USER').fetchone()
       self.conn.commit()
-      userid = list(userid)
-      userid = userid[0][0] if len(userid) > 0 else -1
+      userid = userid[0] if len(userid) > 0 else -1
     except Exception as e:
       return False, str(e)
     return True, userid
@@ -60,7 +76,7 @@ class DB:
       return False, '缺少必要的参数'
     sql = 'SELECT * FROM USER  WHERE name = "%s" AND password = "%s"'%(user['name'], user['password'])
 
-    keys = ['id', 'name', 'address', 'avatar', 'email', 'password']
+    keys = ['id', 'name', 'address', 'avatar', 'email', 'password', 'last_online', 'status']
 
     try:
       res = cursor.execute(sql)
@@ -69,6 +85,7 @@ class DB:
       _user = {}
       if len(res) > 0:
         _user = array2dict(keys, res[0])
+        self.update_user_status(_user['id'])
       else:
         raise(Exception('No Such User'))
       res = _user
@@ -79,17 +96,16 @@ class DB:
   def collect_messages(self, userid:int)->(bool, list):
     # 获取用户的消息
     cursor = self.conn.cursor()
-    sql = 'SELECT m.id, m.status, m.content, u.id, u.name, u.avatar, u.address, u.email \
+    sql = 'SELECT m.id, m.status, m.content, m.ts, u.id, u.name, u.avatar, u.address, u.email, u.last_online, u.status \
       FROM MESSAGE AS m INNER JOIN USER as u \
-      ON m.to_userid = %d WHERE m.from_userid = u.id' % (int(userid))
+      ON m.to_userid = %d OR m.from_userid = %d WHERE m.from_userid = u.id' % (int(userid), int(userid))
 
-    # print(sql)
-
-    keys = ['id', 'status', 'content', { 'user': ['id', 'name', 'avatar', 'address', 'email'] }]
+    keys = ['id', 'status', 'content', 'ts', { 'user': ['id', 'name', 'avatar', 'address', 'email', 'last_online', 'status'] }]
 
     try:
       res = cursor.execute(sql)
       self.conn.commit()
+      self.update_user_status(userid)
       res = list(res)
       messages = [array2dict(keys, v) for v in res]
 
@@ -100,17 +116,18 @@ class DB:
   def collect_contacts(self, userid:int)->(bool, list):
     # 获取用户的联系人
     cursor = self.conn.cursor()
-    sql = 'SELECT c.id, c.name, c.avatar, c.address, c.email\
+    sql = 'SELECT c.id, c.name, c.avatar, c.address, c.email, c.last_online, c.status \
       FROM CONTACTS AS u INNER JOIN USER as c \
       ON u.id = %d WHERE c.id = u.contact_id' % (int(userid))
 
     print(sql)
 
-    keys = ['id', 'name', 'avatar', 'address', 'email']
+    keys = ['id', 'name', 'avatar', 'address', 'email', 'last_online', 'status']
 
     try:
       res = cursor.execute(sql)
       self.conn.commit()
+      self.update_user_status(userid)
       res = list(res)
       contacts = [array2dict(keys, v) for v in res]
     except Exception as e:
@@ -125,10 +142,14 @@ class DB:
       VALUES (%d, %d, "%s", %d)' % (int(from_userid), int(to_userid), content, int(ts))
 
     print(sql)
+    msgid = -1
 
     try:
       cursor.execute(sql)
+      msgid = cursor.execute('SELECT max(id) FROM MESSAGE').fetchone()
       self.conn.commit()
+      self.update_user_status(from_userid)
+      msgid = msgid[0]
     except Exception as e:
       return False, str(e)
-    return True, ''
+    return True, msgid

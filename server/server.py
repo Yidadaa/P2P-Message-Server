@@ -44,7 +44,7 @@ def get_messages():
     'success': False
   }
 
-  print(status, res)
+  # print(status, res)
 
   if status is True:
     return json.dumps({ 'success': status, 'data': res })
@@ -79,7 +79,7 @@ def send_messages():
   print(status, res)
 
   if status is True:
-    return json.dumps({ 'success': status })
+    return json.dumps({ 'success': status, 'id': res })
   else:
     return json.dumps(error)
 
