@@ -1,16 +1,9 @@
 import sqlite3
 import os, time
+from utils import get_path_of
 
-def get_path_of(filename):
-  file_path = __file__
-  rindex = len(file_path)
-  seperator = '/'
-  try:
-    rindex = file_path.rindex('/')
-  except ValueError:
-    rindex = file_path.rindex('\\')
-    seperator = '\\'
-  return file_path[0:rindex]  + seperator + filename
+USER_KEYS = ['id', 'name', 'address', 'avatar', 'email', 'password', 'last_online', 'status']
+COULD_CHANGE_KEYS = ['name', 'address', 'avatar', 'email', 'last_online', 'status']
 
 def array2dict(keys, values):
   """
@@ -60,9 +53,8 @@ class DB:
     try:
       sql = 'INSERT INTO USER (%s) VALUES (%s)' % (','.join(keys), ','.join(values))
       cursor.execute(sql)
-      userid = cursor.execute('SELECT max(id) FROM USER').fetchone()
+      userid = cursor.lastrowid
       self.conn.commit()
-      userid = userid[0] if len(userid) > 0 else -1
     except Exception as e:
       return False, str(e)
     return True, userid
@@ -76,7 +68,9 @@ class DB:
       return False, '缺少必要的参数'
     sql = 'SELECT * FROM USER  WHERE name = "%s" AND password = "%s"'%(user['name'], user['password'])
 
-    keys = ['id', 'name', 'address', 'avatar', 'email', 'password', 'last_online', 'status']
+    keys = USER_KEYS
+
+    print(sql)
 
     try:
       res = cursor.execute(sql)
@@ -96,18 +90,12 @@ class DB:
   def collect_messages(self, userid:int)->(bool, list):
     # 获取用户的消息
     cursor = self.conn.cursor()
-    sql = 'SELECT m.id, m.status, m.content, m.ts, u.id, u.name, u.avatar, u.address, u.email, u.last_online, u.status \
-      FROM MESSAGE AS m INNER JOIN USER as u \
-      ON m.to_userid = %d OR m.from_userid = %d WHERE m.from_userid = u.id' % (int(userid), int(userid))
-
-    keys = ['id', 'status', 'content', 'ts', { 'user': ['id', 'name', 'avatar', 'address', 'email', 'last_online', 'status'] }]
+    sql = 'SELECT * FROM MESSAGE as m WHERE m.to_userid = %d OR m.from_userid = %d' % (int(userid), int(userid))
 
     try:
-      res = cursor.execute(sql)
+      messages = cursor.execute(sql).fetchall()
       self.conn.commit()
       self.update_user_status(userid)
-      res = list(res)
-      messages = [array2dict(keys, v) for v in res]
 
     except Exception as e:
       return False, str(e)
@@ -116,20 +104,19 @@ class DB:
   def collect_contacts(self, userid:int)->(bool, list):
     # 获取用户的联系人
     cursor = self.conn.cursor()
-    sql = 'SELECT c.id, c.name, c.avatar, c.address, c.email, c.last_online, c.status \
-      FROM CONTACTS AS u INNER JOIN USER as c \
-      ON u.id = %d WHERE c.id = u.contact_id' % (int(userid))
-
-    print(sql)
 
     keys = ['id', 'name', 'avatar', 'address', 'email', 'last_online', 'status']
 
+    sql = 'SELECT %s \
+      FROM CONTACTS AS u INNER JOIN USER as c \
+      ON u.id = %d WHERE c.id = u.contact_id' % (','.join(['c.' + k for k in keys]), int(userid))
+
+    print(sql)
+
     try:
-      res = cursor.execute(sql)
+      contacts = cursor.execute(sql).fetchall()
       self.conn.commit()
       self.update_user_status(userid)
-      res = list(res)
-      contacts = [array2dict(keys, v) for v in res]
     except Exception as e:
       return False, str(e)
 
@@ -146,10 +133,93 @@ class DB:
 
     try:
       cursor.execute(sql)
-      msgid = cursor.execute('SELECT max(id) FROM MESSAGE').fetchone()
+      msgid = cursor.lastrowid
       self.conn.commit()
       self.update_user_status(from_userid)
-      msgid = msgid[0]
     except Exception as e:
       return False, str(e)
     return True, msgid
+
+  def update_user_info(self, user_info:dict, userid:int):
+    """
+    更新用户信息
+    """
+    filtered_keys = map(lambda k: '='.join([k, '"' + user_info[k] + '"']), user_info.keys())
+
+    cursor = self.conn.cursor()
+
+    sql = 'UPDATE USER SET %s WHERE id = %d'\
+      % (','.join(filtered_keys), userid)
+
+    print(sql)
+
+    try:
+      cursor.execute(sql)
+      self.conn.commit()
+      self.update_user_status(userid)
+    except Exception as e:
+      return False, str(e)
+    return True, ''
+
+  def start_connection(self, from_uid, from_ip, from_port, to_uid):
+    """
+    更新连接状态
+    """
+    cursor = self.conn.cursor()
+
+    sql = '''INSERT INTO CONNNECIONS (from_uid, from_ip, from_port, to_uid, status)
+      VALUES (%d, '%s', '%s', %d, %d)''' % (int(from_uid), from_ip, from_port, int(to_uid), 0)
+
+    print(sql)
+
+    try:
+      cursor.execute(sql)
+      self.conn.commit()
+      self.update_user_status(from_uid)
+    except Exception as e:
+      return False, str(e)
+    return True, ''
+
+  def fetch_connection_info(self, cid):
+    """
+    获取连接状态
+    """
+
+    sql = 'SELECT * FROM CONNECTIONS WHERE id = ?'
+
+    try:
+      res = self.conn.execute(sql, cid).fetchone()
+      print(res)
+      return True, res
+    except Exception as e:
+      return False, str(e)
+
+  def reply_connection(self, cid, to_port, to_ip):
+    """
+    应答连接
+    """
+    sql = 'UPDATE CONNECTIONS SET to_port = "%s", to_ip = "%s", status = %d WHERE cid = %d' % (to_port, to_ip, 1, cid)
+
+    print(sql)
+
+    try:
+      res = self.conn.execute(sql).fetchone()
+      print(res)
+      return True, res
+    except Exception as e:
+      return False, str(e)
+
+  def try_connection(self, cid):
+    """
+    尝试连接
+    """
+    sql = 'UPDATE CONNECTIONS SET status = status + 1 WHERE cid = %d' % cid
+
+    print(sql)
+
+    try:
+      res = self.conn.execute(sql).fetchone()
+      print(res)
+      return True, res
+    except Exception as e:
+      return False, str(e)
